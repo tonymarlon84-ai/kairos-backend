@@ -1,62 +1,95 @@
 const express = require("express");
-const admin = require("firebase-admin");
+const axios = require("axios");
 const cors = require("cors");
 
 const app = express();
-
-app.use(cors());
 app.use(express.json());
+app.use(cors());
 
-// 🔥 INICIALIZA FIREBASE
-admin.initializeApp();
+// 🔑 SUA CHAVE ASAAS
+const ASAAS_API_KEY = "$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OmMwYTdlMDFjLTJkZjYtNDJhMC1iZTZhLTk1MjkwMjc3YzRlOTo6JGFhY2hfZWU2NWIxODAtMGQxMS00N2UwLWEwOWUtMGFiNDRjZDNkMGY0";
 
-// 🚀 ROTA WEBHOOK (ASAAS)
-app.post("/webhook", async (req, res) => {
+// 🌐 URL BASE ASAAS
+const ASAAS_URL = "https://api.asaas.com/v3";
+
+// 🚀 CRIAR COBRANÇA PIX
+app.post("/criar-pagamento", async (req, res) => {
   try {
-    const data = req.body;
+    const { name, cpfCnpj, value } = req.body;
 
-    console.log("Webhook recebido:", data);
-
-    if (data.event === "PAYMENT_RECEIVED") {
-      const payment = data.payment;
-      const rideId = payment.externalReference;
-
-      if (!rideId) {
-        return res.status(200).send("Ride not found");
+    // 1️⃣ Criar cliente
+    const cliente = await axios.post(
+      ${ASAAS_URL}/customers,
+      {
+        name,
+        cpfCnpj,
+      },
+      {
+        headers: {
+          access_token: ASAAS_API_KEY,
+        },
       }
+    );
 
-      const rideRef = admin.firestore().collection("rides").doc(rideId);
-      const rideDoc = await rideRef.get();
-
-      if (!rideDoc.exists) {
-        return res.status(200).send("Ride not found");
+    // 2️⃣ Criar cobrança PIX
+    const pagamento = await axios.post(
+      ${ASAAS_URL}/payments,
+      {
+        customer: cliente.data.id,
+        billingType: "PIX",
+        value: value,
+        dueDate: new Date().toISOString().split("T")[0],
+      },
+      {
+        headers: {
+          access_token: ASAAS_API_KEY,
+        },
       }
+    );
 
-      // 🔥 MARCA CORRIDA COMO PAGA (DINHEIRO FICA NA EMPRESA)
-      await rideRef.update({
-        paymentStatus: "paid",
-        paidAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+    // 3️⃣ Gerar QR Code
+    const qr = await axios.get(
+      ${ASAAS_URL}/payments/${pagamento.data.id}/pixQrCode,
+      {
+        headers: {
+          access_token: ASAAS_API_KEY,
+        },
+      }
+    );
 
-      console.log("Pagamento confirmado e salvo na empresa");
-    }
-
-    res.status(200).send("OK");
+    res.json({
+      success: true,
+      paymentId: pagamento.data.id,
+      qrCode: qr.data.payload,
+      qrImage: qr.data.encodedImage,
+    });
 
   } catch (error) {
-    console.error("Erro webhook:", error);
-    res.status(500).send("Erro");
+    console.log(error.response?.data || error.message);
+    res.status(500).json({ error: "Erro ao criar pagamento" });
   }
 });
 
-// 🔥 ROTA PRA TESTE (OPCIONAL)
-app.get("/", (req, res) => {
-  res.send("Servidor Kairos rodando");
+// 🔔 WEBHOOK (CONFIRMA PAGAMENTO)
+app.post("/webhook", (req, res) => {
+  const data = req.body;
+
+  console.log("Webhook recebido:", data);
+
+  if (data.event === "PAYMENT_RECEIVED") {
+    console.log("💰 PAGAMENTO RECEBIDO!");
+
+    // 👉 Aqui você pode:
+    // atualizar corrida no Firebase
+    // liberar motorista
+    // etc
+  }
+
+  res.sendStatus(200);
 });
 
-// 🚀 PORTA (ESSENCIAL PRO RENDER)
+// 🚀 START
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log("Servidor rodando na porta " + PORT);
+  console.log("Servidor rodando na porta", PORT);
 });
