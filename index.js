@@ -65,7 +65,9 @@ app.post("/criar-pagamento", async (req, res) => {
 
   } catch (error) {
     console.log("ERRO:", error.response?.data || error.message);
-    res.status(500).json({ error: "Erro ao criar pagamento" });
+    res.status(500).json({
+      error: "Erro ao criar pagamento"
+    });
   }
 });
 
@@ -80,6 +82,7 @@ app.post("/webhook", (req, res) => {
   res.sendStatus(200);
 });
 
+// START
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
