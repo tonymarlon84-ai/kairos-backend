@@ -1,6 +1,5 @@
 const express = require("express");
 const admin = require("firebase-admin");
-const axios = require("axios");
 const cors = require("cors");
 
 const app = express();
@@ -11,10 +10,7 @@ app.use(express.json());
 // 🔥 INICIALIZA FIREBASE
 admin.initializeApp();
 
-// 🔑 SUA CHAVE ASAAS
-const ASAAS_API_KEY = "$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OmZkNGY5NGE2LTk5N2EtNGExMy04MzFjLWQ1MmE3YTY3NjgzYjo6JGFhY2hfYTcwMzRmMTQtMzNhZi00MWI1LWE2YTUtMzAzMDY0MWE1NjZk";
-
-// 🚀 ROTA WEBHOOK
+// 🚀 ROTA WEBHOOK (ASAAS)
 app.post("/webhook", async (req, res) => {
   try {
     const data = req.body;
@@ -36,50 +32,13 @@ app.post("/webhook", async (req, res) => {
         return res.status(200).send("Ride not found");
       }
 
-      const ride = rideDoc.data();
-      const driverId = ride.driverId;
-      const price = ride.price;
-
+      // 🔥 MARCA CORRIDA COMO PAGA (DINHEIRO FICA NA EMPRESA)
       await rideRef.update({
         paymentStatus: "paid",
         paidAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
-      const driverDoc = await admin.firestore()
-        .collection("drivers")
-        .doc(driverId)
-        .get();
-
-      if (!driverDoc.exists) {
-        return res.status(200).send("Driver not found");
-      }
-
-      const driver = driverDoc.data();
-      const pixKey = driver.pixKey;
-
-      if (!pixKey) {
-        console.log("Motorista sem chave PIX");
-        return res.status(200).send("Driver without pixKey");
-      }
-
-      const driverValue = price * 0.90;
-
-      await axios.post(
-        "https://api.asaas.com/v3/transfers",
-        {
-          value: driverValue,
-          pixAddressKey: pixKey,
-          description: "Repasse automático corrida Kairós"
-        },
-        {
-          headers: {
-            access_token: ASAAS_API_KEY,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      console.log("Repasse enviado automaticamente");
+      console.log("Pagamento confirmado e salvo na empresa");
     }
 
     res.status(200).send("OK");
@@ -90,7 +49,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// 🔥 TESTE
+// 🔥 ROTA PRA TESTE (OPCIONAL)
 app.get("/", (req, res) => {
   res.send("Servidor Kairos rodando");
 });
