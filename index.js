@@ -6,11 +6,11 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// 🔐 TOKEN PAGSEGURO (Bearer Token novo)
+// 🔐 TOKEN PAGSEGURO
 const TOKEN = process.env.TOKEN;
 
 // ===============================
-// 🔹 CRIAR PIX (API NOVA)
+// 🔹 CRIAR PIX
 // ===============================
 app.post("/criar-pix", async (req, res) => {
   const { valor } = req.body;
@@ -49,14 +49,13 @@ app.post("/criar-pix", async (req, res) => {
       },
       {
         headers: {
-          Authorization: Bearer ${TOKEN},
+          Authorization: "Bearer " + TOKEN,
           "Content-Type": "application/json"
         }
       }
     );
 
-    const pix =
-      response.data.charges[0].payment_method.qr_codes[0];
+    const pix = response.data.charges[0].payment_method.qr_codes[0];
 
     res.json({
       qrCode: pix.text,
