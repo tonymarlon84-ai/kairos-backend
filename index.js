@@ -1,16 +1,23 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+const admin = require("firebase-admin");
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// 🔐 TOKEN PAGSEGURO
+// 🔐 PAGSEGURO
 const TOKEN = process.env.TOKEN;
 
-// 🔥 BANCO TEMPORÁRIO
-const pagamentos = {};
+// 🔥 FIREBASE ADMIN
+const serviceAccount = require("./serviceAccountKey.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const firestore = admin.firestore();
 
 // ===============================
 // 🔥 PING
@@ -20,19 +27,40 @@ app.get("/ping", (req, res) => {
 });
 
 // ===============================
-// 🔹 CRIAR PIX (REAL)
+// 🔹 CRIAR PIX (BLINDADO)
 // ===============================
 app.post("/criar-pix", async (req, res) => {
-  const { valor, rideId } = req.body;
 
-  if (!valor || !rideId) {
-    return res.status(400).json({
-      erro: "valor e rideId obrigatórios"
-    });
+  const { rideId } = req.body;
+
+  if (!rideId) {
+    return res.status(400).json({ erro: "rideId obrigatório" });
   }
 
   try {
 
+    // 🔥 BUSCA CORRIDA REAL
+    const rideDoc = await firestore.collection("rides").doc(rideId).get();
+
+    if (!rideDoc.exists) {
+      return res.status(400).json({ erro: "Corrida não encontrada" });
+    }
+
+    const rideData = rideDoc.data();
+
+    // 🔒 VALIDA STATUS
+    if (rideData.paymentStatus === "paid") {
+      return res.status(400).json({ erro: "Corrida já paga" });
+    }
+
+    // 🔒 VALOR VEM DO BANCO (ANTI-FRAUDE)
+    const valor = rideData.price;
+
+    if (!valor || valor <= 0) {
+      return res.status(400).json({ erro: "Valor inválido" });
+    }
+
+    // 🔥 CRIA PIX REAL
     const response = await axios.post(
       "https://api.pagseguro.com/orders",
       {
@@ -73,12 +101,12 @@ app.post("/criar-pix", async (req, res) => {
     const charge = response.data.charges[0];
     const pix = charge.payment_method.qr_codes[0];
 
-    // 🔥 SALVA PAGAMENTO
-    pagamentos[rideId] = {
-      status: "pendente",
+    // 🔥 SALVA NO FIREBASE
+    await firestore.collection("rides").doc(rideId).update({
+      paymentStatus: "pending",
       chargeId: charge.id,
-      valor: valor
-    };
+      pixCode: pix.text
+    });
 
     res.json({
       qrCode: pix.text
@@ -88,13 +116,13 @@ app.post("/criar-pix", async (req, res) => {
     console.error(error.response?.data || error.message);
 
     res.status(500).json({
-      erro: "Erro ao gerar PIX"
+      erro: "Erro ao gerar pagamento"
     });
   }
 });
 
 // ===============================
-// 🔥 WEBHOOK PAGSEGURO (AUTOMÁTICO)
+// 🔥 WEBHOOK SEGURO
 // ===============================
 app.post("/webhook", async (req, res) => {
 
@@ -104,17 +132,38 @@ app.post("/webhook", async (req, res) => {
 
     const chargeId = data.id;
 
-    // 🔥 BUSCA QUAL CORRIDA É
-    const ride = Object.keys(pagamentos).find(
-      key => pagamentos[key].chargeId === chargeId
-    );
+    if (!chargeId) return res.sendStatus(200);
 
-    if (!ride) return res.sendStatus(200);
+    // 🔥 BUSCA NO FIREBASE
+    const snapshot = await firestore
+      .collection("rides")
+      .where("chargeId", "==", chargeId)
+      .get();
 
-    // 🔥 VERIFICA STATUS
+    if (snapshot.empty) return res.sendStatus(200);
+
+    const doc = snapshot.docs[0];
+    const rideId = doc.id;
+    const rideData = doc.data();
+
+    // 🔒 VALIDAR VALOR PAGO
+    const valorPago = data.amount?.value;
+    const valorReal = Math.round(rideData.price * 100);
+
+    if (valorPago !== valorReal) {
+      console.log("🚨 FRAUDE DETECTADA:", rideId);
+      return res.sendStatus(400);
+    }
+
+    // 🔥 CONFIRMA PAGAMENTO
     if (data.status === "PAID") {
-      pagamentos[ride].status = "pago";
-      console.log("Pagamento confirmado:", ride);
+
+      await firestore.collection("rides").doc(rideId).update({
+        paymentStatus: "paid",
+        paidAt: new Date()
+      });
+
+      console.log("✅ Pagamento confirmado:", rideId);
     }
 
     res.sendStatus(200);
@@ -126,21 +175,29 @@ app.post("/webhook", async (req, res) => {
 });
 
 // ===============================
-// 🔥 STATUS PRO APP
+// 🔥 STATUS PARA O APP
 // ===============================
-app.get("/status/:rideId", (req, res) => {
+app.get("/status/:rideId", async (req, res) => {
 
   const rideId = req.params.rideId;
 
-  const pagamento = pagamentos[rideId];
+  try {
 
-  if (!pagamento) {
-    return res.json({ status: "nao_encontrado" });
+    const rideDoc = await firestore.collection("rides").doc(rideId).get();
+
+    if (!rideDoc.exists) {
+      return res.json({ status: "nao_encontrado" });
+    }
+
+    const data = rideDoc.data();
+
+    res.json({
+      status: data.paymentStatus || "pending"
+    });
+
+  } catch (e) {
+    res.status(500).json({ status: "erro" });
   }
-
-  res.json({
-    status: pagamento.status
-  });
 });
 
 // ===============================
