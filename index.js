@@ -9,22 +9,37 @@ app.use(cors());
 // 🔐 TOKEN PAGSEGURO
 const TOKEN = process.env.TOKEN;
 
+// 🔥 BANCO TEMPORÁRIO
+const pagamentos = {};
+
 // ===============================
-// 🔹 CRIAR PIX
+// 🔥 PING
+// ===============================
+app.get("/ping", (req, res) => {
+  res.send("ok");
+});
+
+// ===============================
+// 🔹 CRIAR PIX (REAL)
 // ===============================
 app.post("/criar-pix", async (req, res) => {
-  const { valor } = req.body;
+  const { valor, rideId } = req.body;
+
+  if (!valor || !rideId) {
+    return res.status(400).json({
+      erro: "valor e rideId obrigatórios"
+    });
+  }
 
   try {
+
     const response = await axios.post(
       "https://api.pagseguro.com/orders",
       {
-        reference_id: "corrida_kairos",
-        customer: {
-          name: "Cliente",
-          email: "cliente@email.com",
-          tax_id: "12345678909"
-        },
+        reference_id: rideId,
+        notification_urls: [
+          "https://kairos-backend-o48s.onrender.com/webhook"
+        ],
         items: [
           {
             name: "Corrida",
@@ -34,8 +49,8 @@ app.post("/criar-pix", async (req, res) => {
         ],
         charges: [
           {
-            reference_id: "pix_charge",
-            description: "Pagamento via Pix",
+            reference_id: rideId,
+            description: "Corrida Kairós",
             amount: {
               value: Math.round(valor * 100),
               currency: "BRL"
@@ -55,24 +70,79 @@ app.post("/criar-pix", async (req, res) => {
       }
     );
 
-    const pix = response.data.charges[0].payment_method.qr_codes[0];
+    const charge = response.data.charges[0];
+    const pix = charge.payment_method.qr_codes[0];
+
+    // 🔥 SALVA PAGAMENTO
+    pagamentos[rideId] = {
+      status: "pendente",
+      chargeId: charge.id,
+      valor: valor
+    };
 
     res.json({
-      qrCode: pix.text,
-      qrCodeBase64: pix.links[0].href
+      qrCode: pix.text
     });
 
   } catch (error) {
     console.error(error.response?.data || error.message);
+
     res.status(500).json({
-      erro: "Erro no backend",
-      detalhe: error.response?.data || error.message
+      erro: "Erro ao gerar PIX"
     });
   }
 });
 
 // ===============================
-// 🔹 SERVIDOR
+// 🔥 WEBHOOK PAGSEGURO (AUTOMÁTICO)
+// ===============================
+app.post("/webhook", async (req, res) => {
+
+  try {
+
+    const data = req.body;
+
+    const chargeId = data.id;
+
+    // 🔥 BUSCA QUAL CORRIDA É
+    const ride = Object.keys(pagamentos).find(
+      key => pagamentos[key].chargeId === chargeId
+    );
+
+    if (!ride) return res.sendStatus(200);
+
+    // 🔥 VERIFICA STATUS
+    if (data.status === "PAID") {
+      pagamentos[ride].status = "pago";
+      console.log("Pagamento confirmado:", ride);
+    }
+
+    res.sendStatus(200);
+
+  } catch (err) {
+    console.error("Erro webhook:", err);
+    res.sendStatus(500);
+  }
+});
+
+// ===============================
+// 🔥 STATUS PRO APP
+// ===============================
+app.get("/status/:rideId", (req, res) => {
+
+  const rideId = req.params.rideId;
+
+  const pagamento = pagamentos[rideId];
+
+  if (!pagamento) {
+    return res.json({ status: "nao_encontrado" });
+  }
+
+  res.json({
+    status: pagamento.status
+  });
+});
+
 // ===============================
 const PORT = process.env.PORT || 3000;
 
